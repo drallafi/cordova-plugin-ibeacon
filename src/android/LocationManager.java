@@ -53,6 +53,7 @@ import org.altbeacon.beacon.MonitorNotifier;
 import org.altbeacon.beacon.RangeNotifier;
 import org.altbeacon.beacon.Region;
 import org.altbeacon.beacon.service.RunningAverageRssiFilter;
+import org.altbeacon.beacon.service.ArmaRssiFilter;
 import org.altbeacon.beacon.service.RangedBeacon;
 import org.apache.cordova.CallbackContext;
 import org.apache.cordova.CordovaInterface;
@@ -67,23 +68,30 @@ import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.security.InvalidKeyException;
 import java.util.Arrays;
+import java.util.ArrayList;
 import java.util.Collection;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.LinkedBlockingQueue;
+import java.util.List;
 
 @TargetApi(Build.VERSION_CODES.JELLY_BEAN)
 public class LocationManager extends CordovaPlugin implements BeaconConsumer {
 
     public static final String TAG = "com.unarin.beacon";
-    private static final int PERMISSION_REQUEST_COARSE_LOCATION = 1;
+    private static final int PERMISSION_REQUEST = 1;
     private static final String FOREGROUND_BETWEEN_SCAN_PERIOD_NAME = "com.unarin.cordova.beacon.android.altbeacon.ForegroundBetweenScanPeriod";
     private static final String FOREGROUND_SCAN_PERIOD_NAME = "com.unarin.cordova.beacon.android.altbeacon.ForegroundScanPeriod";
     private static final int DEFAULT_FOREGROUND_BETWEEN_SCAN_PERIOD = 0;
     private static final String SAMPLE_EXPIRATION_MILLISECOND = "com.unarin.cordova.beacon.android.altbeacon.SampleExpirationMilliseconds";
     private static final int DEFAULT_SAMPLE_EXPIRATION_MILLISECOND = 20000;
+    private static final String ENABLE_ARMA_FILTER_NAME = "com.unarin.cordova.beacon.android.altbeacon.EnableArmaFilter";
+    private static final boolean DEFAULT_ENABLE_ARMA_FILTER = false;
+    private static final String REQUEST_BT_PERMISSION_NAME = "com.unarin.cordova.beacon.android.altbeacon.RequestBtPermission";
+    private static final boolean DEFAULT_REQUEST_BT_PERMISSION = true;
     private static final int DEFAULT_FOREGROUND_SCAN_PERIOD = 1100;
     private static int CDV_LOCATION_MANAGER_DOM_DELEGATE_TIMEOUT = 30;
     private static final int BUILD_VERSION_CODES_M = 23;
+    private static final int BUILD_VERSION_CODES_S = 31;
 
     private BeaconTransmitter beaconTransmitter;
     private BeaconManager iBeaconManager;
@@ -97,6 +105,10 @@ public class LocationManager extends CordovaPlugin implements BeaconConsumer {
     private BroadcastReceiver broadcastReceiver;
     private BluetoothAdapter bluetoothAdapter;
 
+    private enum LocationType {
+        COARSE,
+        FINE
+    } 
 
     /**
      * Constructor.
@@ -135,8 +147,16 @@ public class LocationManager extends CordovaPlugin implements BeaconConsumer {
         Log.i(TAG, "Determined config value SAMPLE_EXPIRATION_MILLISECOND: " +
                 String.valueOf(sampleExpirationMilliseconds));
 
-        iBeaconManager.setRssiFilterImplClass(RunningAverageRssiFilter.class);
-        RunningAverageRssiFilter.setSampleExpirationMilliseconds(sampleExpirationMilliseconds);
+        final boolean enableArmaFilter = this.preferences.getBoolean(
+                ENABLE_ARMA_FILTER_NAME, DEFAULT_ENABLE_ARMA_FILTER);
+
+        if(enableArmaFilter){
+               iBeaconManager.setRssiFilterImplClass(ArmaRssiFilter.class);
+        }
+        else{
+               iBeaconManager.setRssiFilterImplClass(RunningAverageRssiFilter.class);
+               RunningAverageRssiFilter.setSampleExpirationMilliseconds(sampleExpirationMilliseconds);
+        }
         RangedBeacon.setSampleExpirationMilliseconds(sampleExpirationMilliseconds);
 
         initBluetoothListener();
@@ -152,7 +172,12 @@ public class LocationManager extends CordovaPlugin implements BeaconConsumer {
         }
         //TODO AddObserver when page loaded
 
-        tryToRequestMarshmallowLocationPermission();
+        final boolean requestPermission = this.preferences.getBoolean(
+                REQUEST_BT_PERMISSION_NAME, DEFAULT_REQUEST_BT_PERMISSION);
+           
+        if (requestPermission) {
+            tryToRequestPermission();
+        }
     }
 
     /**
@@ -225,7 +250,7 @@ public class LocationManager extends CordovaPlugin implements BeaconConsumer {
         } else if (action.equals("isAdvertising")) {
             isAdvertising(callbackContext);
         } else if (action.equals("startAdvertising")) {
-            startAdvertising(args.optJSONObject(0), callbackContext);
+            startAdvertising(args, callbackContext);
         } else if (action.equals("stopAdvertising")) {
             stopAdvertising(callbackContext);
         } else if (action.equals("isBluetoothEnabled")) {
@@ -258,12 +283,19 @@ public class LocationManager extends CordovaPlugin implements BeaconConsumer {
     }
 
     @TargetApi(BUILD_VERSION_CODES_M)
-    private void tryToRequestMarshmallowLocationPermission() {
+    private void tryToRequestPermission() {
 
+        List<String> manifestPermissionTypes = new ArrayList<>();
+        
         if (Build.VERSION.SDK_INT < BUILD_VERSION_CODES_M) {
-            Log.i(TAG, "tryToRequestMarshmallowLocationPermission() skipping because API code is " +
+            Log.i(TAG, "tryToRequestPermission() skipping because API code is " +
                     "below criteria: " + String.valueOf(Build.VERSION.SDK_INT));
-            return;
+        } else if  (Build.VERSION.SDK_INT < BUILD_VERSION_CODES_S) {
+            manifestPermissionTypes.add(Manifest.permission.ACCESS_COARSE_LOCATION);
+        } else {
+            manifestPermissionTypes.add(Manifest.permission.ACCESS_FINE_LOCATION);
+            manifestPermissionTypes.add(Manifest.permission.ACCESS_COARSE_LOCATION);
+            manifestPermissionTypes.add(Manifest.permission.BLUETOOTH_SCAN); 
         }
 
         final Activity activity = cordova.getActivity();
@@ -272,21 +304,32 @@ public class LocationManager extends CordovaPlugin implements BeaconConsumer {
 
         if (checkSelfPermissionMethod == null) {
             Log.e(TAG, "Could not obtain the method Activity.checkSelfPermission method. Will " +
-                    "not check for ACCESS_COARSE_LOCATION even though we seem to be on a " +
+                    "not check even though we seem to be on a " +
                     "supported version of Android.");
             return;
         }
 
         try {
 
-            final Integer permissionCheckResult = (Integer) checkSelfPermissionMethod.invoke(
-                    activity, Manifest.permission.ACCESS_COARSE_LOCATION);
+            List<String> grantedTypes = new ArrayList<>();
+            for (String manifestPermissionType : manifestPermissionTypes) {
+                final Integer permissionCheckResult = (Integer) checkSelfPermissionMethod.invoke(
+                        activity, manifestPermissionType);
+                        Log.i(TAG, "Permission check result for " + manifestPermissionType + ": " +
+                        String.valueOf(permissionCheckResult));
 
-            Log.i(TAG, "Permission check result for ACCESS_COARSE_LOCATION: " +
-                    String.valueOf(permissionCheckResult));
+                if (permissionCheckResult == PackageManager.PERMISSION_GRANTED) {
+                    Log.i(TAG, "Permission for " + manifestPermissionType + " has already been granted.");
+                    grantedTypes.add(manifestPermissionType);        
+                }
+            }
 
-            if (permissionCheckResult == PackageManager.PERMISSION_GRANTED) {
-                Log.i(TAG, "Permission for ACCESS_COARSE_LOCATION has already been granted.");
+            for (String grantedType : grantedTypes) {
+                manifestPermissionTypes.remove(grantedType);
+            }
+
+            if (manifestPermissionTypes.size() == 0) {
+                Log.i(TAG, "Permission for All has already been granted.");
                 return;
             }
 
@@ -294,43 +337,32 @@ public class LocationManager extends CordovaPlugin implements BeaconConsumer {
 
             if (requestPermissionsMethod == null) {
                 Log.e(TAG, "Could not obtain the method Activity.requestPermissions. Will " +
-                        "not ask for ACCESS_COARSE_LOCATION even though we seem to be on a " +
+                        "not ask  even though we seem to be on a " +
                         "supported version of Android.");
                 return;
             }
 
-            /*
-            final AlertDialog.Builder builder = new AlertDialog.Builder(activity);
-            builder.setTitle("This app needs location access");
-            builder.setMessage("Please grant location access so this app can detect beacons.");
-            builder.setPositiveButton(android.R.string.ok, null);
-            builder.setOnDismissListener(new DialogInterface.OnDismissListener() {
-                @SuppressLint("NewApi")
-                @Override
-                public void onDismiss(final DialogInterface dialog) {
-
-                    try {
-                        requestPermissionsMethod.invoke(activity,
-                                new String[]{Manifest.permission.ACCESS_COARSE_LOCATION},
-                                PERMISSION_REQUEST_COARSE_LOCATION
-                        );
-                    } catch (IllegalAccessException e) {
-                        Log.e(TAG, "IllegalAccessException while requesting permission for " +
-                                "ACCESS_COARSE_LOCATION:", e);
-                    } catch (InvocationTargetException e) {
-                        Log.e(TAG, "InvocationTargetException while requesting permission for " +
-                                "ACCESS_COARSE_LOCATION:", e);
-                    }
+            try {
+                final int size = manifestPermissionTypes.size();
+                String[] permissions = new String[size];
+                for (int i = 0; i < size; i++) {
+                    permissions[i] = manifestPermissionTypes.get(i);
                 }
-            });
 
-            builder.show();
-            */
+                requestPermissionsMethod.invoke(activity,
+                        permissions,
+                        PERMISSION_REQUEST
+                );
+            } catch (IllegalAccessException e) {
+                Log.e(TAG, "IllegalAccessException while requesting permission:", e);
+            } catch (InvocationTargetException e) {
+                Log.e(TAG, "InvocationTargetException while requesting permission:", e);
+            }
 
         } catch (final IllegalAccessException e) {
-            Log.w(TAG, "IllegalAccessException while checking for ACCESS_COARSE_LOCATION:", e);
+            Log.w(TAG, "IllegalAccessException while checking:", e);
         } catch (final InvocationTargetException e) {
-            Log.w(TAG, "InvocationTargetException while checking for ACCESS_COARSE_LOCATION:", e);
+            Log.w(TAG, "InvocationTargetException while checking:", e);
         }
     }
 
@@ -1159,15 +1191,34 @@ public class LocationManager extends CordovaPlugin implements BeaconConsumer {
 
     }
 
-    private void startAdvertising(final JSONObject arguments, CallbackContext callbackContext) throws JSONException {
+    private void startAdvertising(final JSONArray args, CallbackContext callbackContext) throws JSONException {
         debugLog("Advertisement start START BEACON ");
-        debugLog(arguments.toString(4));
+        debugLog(args.toString(4));
+        /*
+        Advertisement start START BEACON 
+            [
+                {
+                    "identifier": "beaconAsMesh",
+                    "uuid": "e80300fe-ff4b-0c37-5149-d9f394b5ca39",
+                    "major": 0,
+                    "minor": 30463,
+                    "notifyEntryStateOnDisplay": true,
+                    "typeName": "BeaconRegion"
+                },
+                7
+            ]
+        */
+        
+        JSONObject arguments = args.optJSONObject(0); // get first object
         String identifier = arguments.getString("identifier");
 
         //For Android, uuid can be null when scanning for all beacons (I think)
         final String uuid = arguments.has("uuid") && !arguments.isNull("uuid") ? arguments.getString("uuid") : null;
         final String major = arguments.has("major") && !arguments.isNull("major") ? arguments.getString("major") : null;
         final String minor = arguments.has("minor") && !arguments.isNull("minor") ? arguments.getString("minor") : null;
+
+        // optinal second member in JSONArray is just a number 
+        final int measuredPower = args.length() > 1 ? args.getInt(1) : -55;
 
         if (major == null && minor != null)
             throw new UnsupportedOperationException("Unsupported combination of 'major' and 'minor' parameters.");
@@ -1182,7 +1233,7 @@ public class LocationManager extends CordovaPlugin implements BeaconConsumer {
                         .setId2(major) // Major for beacon
                         .setId3(minor) // Minor for beacon
                         .setManufacturer(0x004C) // Radius Networks.0x0118  Change this for other beacon layouts//0x004C for iPhone
-                        .setTxPower(-56) // Power in dB
+                        .setTxPower(measuredPower) // Power in dB
                         .setDataFields(Arrays.asList(new Long[] {0l})) // Remove this for beacon layouts without d: fields
                         .build();
                 debugLog("[DEBUG] Beacon.Builder: "+beacon);
