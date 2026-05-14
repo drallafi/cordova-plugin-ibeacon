@@ -29,8 +29,22 @@
 
 #### Features exclusive to iOS
 
- * Region Monitoring (or geo fencing), works in all app states. 
- * Advertising device as an iBeacon
+ * Region Monitoring (or geo fencing), works in all app states.
+ * ~~Advertising device as an iBeacon~~ — **disabled in this fork** (see note below)
+
+> **Fork note — iBeacon advertising disabled on iOS.**
+> In this fork, `CBPeripheralManager` is no longer eagerly instantiated
+> during `pluginInitialize`. The eager init triggered the iOS Bluetooth
+> permission prompt at cold start, which conflicted with other UI
+> (notably auth web sessions) for apps that only need ranging. As a
+> result, **`startAdvertising`, `stopAdvertising`, `isAdvertising`, and
+> `isBluetoothEnabled` are no-ops on iOS in this fork** —
+> `isAdvertising` and `isBluetoothEnabled` always return `false`, and
+> `startAdvertising` succeeds in the JS callback but never actually
+> advertises. Ranging and monitoring (the primary use case) are
+> unaffected. If you need iBeacon advertising, use the upstream
+> [petermetz/cordova-plugin-ibeacon](https://github.com/petermetz/cordova-plugin-ibeacon)
+> instead.
 
 ### Installation
 
@@ -242,6 +256,11 @@ cordova.plugins.locationManager.isAdvertising()
 ```
 
 ##### Start advertising device as an iBeacon (iOS only)
+
+> **Disabled in this fork.** The call resolves successfully but no
+> advertisement is broadcast. See the *Fork note* under "Features
+> exclusive to iOS" above.
+
 ```
 var uuid = '00000000-0000-0000-0000-000000000000';
 var identifier = 'advertisedBeacon';

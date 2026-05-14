@@ -32,8 +32,13 @@
     [self pauseEventPropagationToDom]; // Before the DOM is loaded we'll just keep collecting the events and fire them later.
 
     [self initLocationManager];
-    [self initPeripheralManager];
-    
+    // iOS 26 / drallafi fork: CBPeripheralManager is no longer eagerly created.
+    // Instantiating it triggers the Bluetooth permission prompt at cold start,
+    // which races other UI (e.g. an auth web session) for ranging-only apps.
+    // Consequence: iBeacon advertising (startAdvertising / stopAdvertising /
+    // isAdvertising / isBluetoothEnabled) is disabled in this fork — see README.
+    // [self initPeripheralManager];
+
     self.debugLogEnabled = true;
     self.debugNotificationsEnabled = false;
     
