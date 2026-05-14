@@ -18,6 +18,7 @@
  */
 
 #import <Foundation/Foundation.h>
+#import <UserNotifications/UserNotifications.h>
 
 @interface LMLogger : NSObject
 

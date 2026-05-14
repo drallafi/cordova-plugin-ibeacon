@@ -25,10 +25,14 @@
 @implementation LMLogger
 
 - (void) postLocalNotificationWithMessage: (NSString*) alertBody {
-    UILocalNotification *notification = [[UILocalNotification alloc] init];
-    notification.alertBody = alertBody;
-    notification.soundName = UILocalNotificationDefaultSoundName;
-    [[UIApplication sharedApplication] presentLocalNotificationNow:notification];
+    UNMutableNotificationContent *content = [[UNMutableNotificationContent alloc] init];
+    content.body = alertBody;
+    content.sound = [UNNotificationSound defaultSound];
+    UNTimeIntervalNotificationTrigger *trigger = [UNTimeIntervalNotificationTrigger triggerWithTimeInterval:0.1 repeats:NO];
+    NSString *identifier = [NSString stringWithFormat:@"LMLogger-%@", [[NSUUID UUID] UUIDString]];
+    UNNotificationRequest *request = [UNNotificationRequest requestWithIdentifier:identifier content:content trigger:trigger];
+    UNUserNotificationCenter *center = [UNUserNotificationCenter currentNotificationCenter];
+    [center addNotificationRequest:request withCompletionHandler:nil];
 }
 
 - (void) debugLog: (NSString*) format, ... {
